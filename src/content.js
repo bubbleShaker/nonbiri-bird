@@ -28,9 +28,14 @@
     rerollMaxMs: 60000,
   };
 
-  const rand = (min, max) => min + Math.random() * (max - min);
-  const randInt = (min, max) => Math.floor(rand(min, max + 1));
-  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+  // DOM 非依存の計算は logic.js（manifest で content.js より先に読み込む）に集約。
+  const L = globalThis.NonbiriLogic;
+  // 読み込み順崩れ/ロード失敗の保険: 未定義なら無言の TypeError で死なず静かに撤退する。
+  if (!L) {
+    console.warn("[nonbiri-bird] logic.js が読み込まれていないため起動を中止したのだ");
+    return;
+  }
+  const { rand } = L; // 羽ばたき周期などローカルで使う乱数だけ取り出す
 
   // 動きに敏感なユーザーへの配慮: 「視差効果を減らす」設定のときは飛ばさない。
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -98,7 +103,7 @@
   ];
 
   let activeCount = 0; // 現在飛んでいる鳥の数
-  let target = randInt(CONFIG.minFlock, CONFIG.maxFlock); // 空にいてほしい目標数
+  let target = L.randInt(CONFIG.minFlock, CONFIG.maxFlock); // 空にいてほしい目標数
 
   // --- 1 羽を生成して飛ばす ---
   function spawnBird() {
@@ -107,8 +112,8 @@
 
     // 奥行き感: サイズを決め、小さい鳥ほど薄く・遅くする（=遠い）。
     const size = rand(CONFIG.minSize, CONFIG.maxSize);
-    const depth = (size - CONFIG.minSize) / (CONFIG.maxSize - CONFIG.minSize); // 0(遠)〜1(近)
-    const opacity = 0.6 + depth * 0.4; // 0.6〜1.0
+    const depth = L.computeDepth(size, CONFIG.minSize, CONFIG.maxSize); // 0(遠)〜1(近)
+    const opacity = L.computeOpacity(depth); // 0.6〜1.0
     const w = size;
     const h = size * (GRID_H / GRID_W);
 
@@ -134,33 +139,26 @@
       fi++;
     }, flapMs);
 
-    // 左右どちらから入るかランダム。画面外→画面外。
-    const leftToRight = Math.random() < 0.5;
-    const startX = leftToRight ? -w : vw + w;
-    const endX = leftToRight ? vw + w : -w;
-    const dir = leftToRight ? 1 : -1; // 進行方向に鳥を向ける（左行きは水平反転）
+    // 左右どちらから入るか・基準Y・ゆらぎ幅を計算（画面外→画面外。上空のみ）。
+    const { startX, endX, dir, baseY, wander } = L.entryGeometry({
+      vw,
+      vh,
+      w,
+      config: CONFIG,
+    });
 
-    // 上空のみ: 画面上部 skyTop〜skyBottom の高さを基準に、小さく上下する。
-    const baseY = rand(vh * CONFIG.skyTop, vh * CONFIG.skyBottom);
-    const wander = rand(8, 26);
-
-    const frameOf = (px, py) => `translate(${px}px, ${py}px) scaleX(${dir})`;
-    const STEPS = 6;
-    const keyframes = [];
-    for (let i = 0; i <= STEPS; i++) {
-      const t = i / STEPS;
-      const x = startX + (endX - startX) * t;
-      const y = baseY + Math.sin(t * Math.PI * 2) * wander;
-      keyframes.push({ transform: frameOf(x, y) });
-    }
+    // dir: 進行方向に鳥を向ける（左行きは scaleX(-1) で水平反転）。
+    const keyframes = L.buildKeyframes({ startX, endX, baseY, wander, dir });
 
     // 速度の緩急: 所要時間は遠い鳥ほど長め(遅い)＋ランダム、easing もランダム。
-    const speedBias = 0.6 + (1 - depth) * 0.8; // 遠い(小)ほど大きい=遅い
-    const duration =
-      rand(CONFIG.minFlightMs, CONFIG.maxFlightMs) * speedBias;
+    const duration = L.computeDuration(
+      depth,
+      CONFIG.minFlightMs,
+      CONFIG.maxFlightMs
+    );
     const anim = bird.animate(keyframes, {
       duration,
-      easing: pick(EASINGS),
+      easing: L.pick(EASINGS),
       fill: "forwards",
     });
 
@@ -179,19 +177,19 @@
   // --- 群れの維持: 目標数に届くまで、ばらけたタイミングで湧かせる ---
   function tick() {
     const canFly = !reduceMotion.matches && !document.hidden;
-    if (canFly && activeCount < target && Math.random() < 0.75) {
+    if (L.shouldSpawn(activeCount, target, canFly)) {
       spawnBird();
     }
     // 飛ばせない状況（動き抑制/非表示タブ）では再チェック間隔を広げて wakeup を減らす。
-    setTimeout(tick, canFly ? rand(800, 3500) : 8000);
+    setTimeout(tick, L.nextTickDelay(canFly));
   }
 
   // 空模様を時々変える: 目標数を振り直す。
   function rerollTarget() {
-    target = randInt(CONFIG.minFlock, CONFIG.maxFlock);
-    setTimeout(rerollTarget, rand(CONFIG.rerollMinMs, CONFIG.rerollMaxMs));
+    target = L.randInt(CONFIG.minFlock, CONFIG.maxFlock);
+    setTimeout(rerollTarget, L.rerollDelay(CONFIG));
   }
 
   setTimeout(tick, rand(1500, 4000));
-  setTimeout(rerollTarget, rand(CONFIG.rerollMinMs, CONFIG.rerollMaxMs));
+  setTimeout(rerollTarget, L.rerollDelay(CONFIG));
 })();
