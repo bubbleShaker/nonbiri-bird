@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "nonbiri-bird",
+  "version": "0.1.0",
+  "description": "鳥がブラウザ内をランダムに、のんびりと、たまーに飛ぶ癒し系の常駐演出。",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
