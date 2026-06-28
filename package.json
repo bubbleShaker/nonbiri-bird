@@ -1,0 +1,10 @@
+{
+  "name": "nonbiri-bird",
+  "version": "0.2.0",
+  "private": true,
+  "description": "鳥がブラウザ内をのんびり飛ぶ癒し系 Chrome 拡張",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check src/logic.js && node --check src/content.js"
+  }
+}
