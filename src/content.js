@@ -164,14 +164,16 @@
       fill: "forwards",
     });
 
+    let cleaned = false;
     const cleanup = () => {
+      if (cleaned) return; // 冪等化: 二重発火で activeCount を二重に減らさない
+      cleaned = true;
       clearInterval(flapTimer);
       bird.remove();
       activeCount--;
     };
-    anim.onfinish = cleanup;
-    // onfinish 不発時の保険（WAAPI が稀に発火しない場合に鳥が残らないように）。
-    anim.finished.catch(cleanup);
+    // finished は「完了で resolve / cancel で reject」。両方を拾って必ず後始末する。
+    anim.finished.then(cleanup, cleanup);
   }
 
   // --- 群れの維持: 目標数に届くまで、ばらけたタイミングで湧かせる ---
@@ -180,7 +182,8 @@
     if (canFly && activeCount < target && Math.random() < 0.75) {
       spawnBird();
     }
-    setTimeout(tick, rand(800, 3500));
+    // 飛ばせない状況（動き抑制/非表示タブ）では再チェック間隔を広げて wakeup を減らす。
+    setTimeout(tick, canFly ? rand(800, 3500) : 8000);
   }
 
   // 空模様を時々変える: 目標数を振り直す。
