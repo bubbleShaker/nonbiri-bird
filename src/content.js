@@ -26,6 +26,9 @@
 
   const rand = (min, max) => min + Math.random() * (max - min);
 
+  // 動きに敏感なユーザーへの配慮: OS/ブラウザで「視差効果を減らす」設定のときは飛ばさない。
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
   // --- オーバーレイ（Shadow DOM）を構築 ---
   const host = document.createElement("div");
   host.id = "nonbiri-bird-host";
@@ -62,6 +65,8 @@
   document.documentElement.appendChild(host);
 
   // カモメ型シルエットの SVG（"M" 字の遠景バード）。
+  // 注意: この文字列は静的ハードコード前提で innerHTML に渡している。
+  //       将来 設定 UI で鳥の種類などを扱う際も、ユーザー入力をここへ連結しないこと（XSS 化を防ぐ）。
   const BIRD_SVG =
     '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg">' +
     '<path d="M5 45 Q30 5 50 32 Q70 5 95 45" ' +
@@ -119,10 +124,16 @@
 
   // --- 次の飛行をランダムな待機後に予約（= 「たまーに」） ---
   function scheduleNext() {
+    if (reduceMotion.matches) return; // 動きを控える設定なら飛ばさない
     const wait = rand(CONFIG.minIdleMs, CONFIG.maxIdleMs);
     setTimeout(flyOnce, wait);
   }
 
+  // 「視差効果を減らす」設定が後から解除されたら、飛行を再開する。
+  reduceMotion.addEventListener("change", () => {
+    if (!reduceMotion.matches) scheduleNext();
+  });
+
   // 初回は短めの待ちで 1 羽飛ばす（読み込み直後に何も起きないと動作確認しづらいため）。
-  setTimeout(flyOnce, rand(2000, 5000));
+  if (!reduceMotion.matches) setTimeout(flyOnce, rand(2000, 5000));
 })();
