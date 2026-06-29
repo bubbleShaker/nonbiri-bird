@@ -60,10 +60,46 @@
     return frames;
   };
 
+  // --- 設定スキーマの単一情報源（popup / content / clamp で共有）---
+  const MAX_BIRDS = 5; // 羽数上限（popup の range max もここから設定する）
+  const DEFAULTS = {
+    enabled: true, // 拡張の ON/OFF
+    maxBirds: 3, // 空にいる最大羽数（1〜MAX_BIRDS）
+    frequency: "mid", // 飛ぶ頻度 low/mid/high
+    excludedSites: [], // 飛ばさないホスト名リスト
+  };
+
+  // 羽数を 1〜MAX_BIRDS の整数へ正規化（NaN/範囲外は安全側へ）。
+  const clampMaxBirds = (n) => {
+    const v = Math.round(Number(n));
+    if (!Number.isFinite(v)) return 1;
+    return Math.max(1, Math.min(MAX_BIRDS, v));
+  };
+
+  // --- 設定の正規化（popup の値 → 内部パラメータ）---
+  // 頻度プリセット → tick 間隔の倍率。高いほど短い間隔＝よく飛ぶ。未知値は等倍。
+  const FREQ_SCALE = { low: 2, mid: 1, high: 0.5 };
+  const freqScale = (frequency) =>
+    Object.prototype.hasOwnProperty.call(FREQ_SCALE, frequency)
+      ? FREQ_SCALE[frequency]
+      : 1;
+
+  // サイト除外判定: hostname が除外リストの項目に完全一致、またはサブドメイン一致なら true。
+  // 例: list=["example.com"] は example.com と foo.example.com を除外する。
+  const isHostExcluded = (hostname, list) => {
+    if (!Array.isArray(list)) return false;
+    const h = String(hostname || "").toLowerCase();
+    return list.some((entry) => {
+      const e = String(entry || "").trim().toLowerCase();
+      if (!e) return false; // 空行は無視
+      return h === e || h.endsWith("." + e);
+    });
+  };
+
   // --- スケジューラの待機時間計算 ---
-  // 飛ばせる時は短い間隔、飛ばせない時（動き抑制/非表示タブ）は長くして wakeup を減らす。
-  const nextTickDelay = (canFly, rng = Math.random) =>
-    canFly ? rand(800, 3500, rng) : 8000;
+  // 飛ばせる時は短い間隔×頻度倍率、飛ばせない時（動き抑制/非表示タブ）は長くして wakeup を減らす。
+  const nextTickDelay = (canFly, rng = Math.random, scale = 1) =>
+    canFly ? rand(800, 3500, rng) * scale : 8000;
   // 目標数の振り直し間隔。
   const rerollDelay = (config, rng = Math.random) =>
     rand(config.rerollMinMs, config.rerollMaxMs, rng);
@@ -81,6 +117,11 @@
     computeDuration,
     entryGeometry,
     buildKeyframes,
+    MAX_BIRDS,
+    DEFAULTS,
+    clampMaxBirds,
+    freqScale,
+    isHostExcluded,
     nextTickDelay,
     rerollDelay,
     shouldSpawn,

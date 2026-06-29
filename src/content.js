@@ -103,7 +103,36 @@
   ];
 
   let activeCount = 0; // 現在飛んでいる鳥の数
-  let target = L.randInt(CONFIG.minFlock, CONFIG.maxFlock); // 空にいてほしい目標数
+  let target = 1; // 空にいてほしい目標数（設定読み込み時に決め直す）
+  let targetInitialized = false; // 初回 applySettings で必ず一度振る
+  const activeBirds = new Set(); // 各鳥の cleanup 関数（OFF/除外時に一括撤去するため）
+
+  // --- 設定（popup から chrome.storage.sync 経由で反映される）---
+  // スキーマの単一情報源は logic.js（DEFAULTS / clampMaxBirds）。popup と揃える。
+  const DEFAULTS = L.DEFAULTS;
+  let freqScale = 1; // 頻度倍率（tick 間隔に掛ける）
+  let siteEnabled = true; // このサイトで飛ばしてよいか（enabled かつ 非除外）
+
+  // 飛行中の鳥を全部片付ける（OFF/除外に切り替わった時）。
+  function removeAllBirds() {
+    for (const cleanup of [...activeBirds]) cleanup();
+  }
+
+  // storage の値を内部パラメータへ反映する。
+  function applySettings(raw) {
+    const s = { ...DEFAULTS, ...(raw || {}) };
+    CONFIG.maxFlock = L.clampMaxBirds(s.maxBirds);
+    freqScale = L.freqScale(s.frequency);
+    siteEnabled =
+      !!s.enabled && !L.isHostExcluded(location.hostname, s.excludedSites);
+    // 初回、または目標数が新上限を超えた時だけ取り直す
+    // （無関係な設定変更で空模様を乱さない）。
+    if (!targetInitialized || target > CONFIG.maxFlock) {
+      target = L.randInt(CONFIG.minFlock, CONFIG.maxFlock);
+      targetInitialized = true;
+    }
+    if (!siteEnabled) removeAllBirds(); // 無効化されたら今いる鳥を撤去
+  }
 
   // --- 1 羽を生成して飛ばす ---
   function spawnBird() {
@@ -167,21 +196,26 @@
       if (cleaned) return; // 冪等化: 二重発火で activeCount を二重に減らさない
       cleaned = true;
       clearInterval(flapTimer);
+      anim.cancel(); // 強制撤去時にアニメを止める（自然完了時は二重でも無害）
       bird.remove();
       activeCount--;
+      activeBirds.delete(cleanup);
     };
+    activeBirds.add(cleanup); // OFF/除外時に removeAllBirds から呼べるよう登録
     // finished は「完了で resolve / cancel で reject」。両方を拾って必ず後始末する。
     anim.finished.then(cleanup, cleanup);
   }
 
   // --- 群れの維持: 目標数に届くまで、ばらけたタイミングで湧かせる ---
   function tick() {
-    const canFly = !reduceMotion.matches && !document.hidden;
+    // siteEnabled: 設定OFF/サイト除外なら飛ばさない。
+    const canFly = siteEnabled && !reduceMotion.matches && !document.hidden;
     if (L.shouldSpawn(activeCount, target, canFly)) {
       spawnBird();
     }
-    // 飛ばせない状況（動き抑制/非表示タブ）では再チェック間隔を広げて wakeup を減らす。
-    setTimeout(tick, L.nextTickDelay(canFly));
+    // 飛ばせない状況（無効/動き抑制/非表示タブ）は間隔を広げて wakeup を減らす。
+    // 飛べる時は頻度設定 freqScale を掛ける（高=短間隔/低=長間隔）。
+    setTimeout(tick, L.nextTickDelay(canFly, Math.random, freqScale));
   }
 
   // 空模様を時々変える: 目標数を振り直す。
@@ -190,6 +224,30 @@
     setTimeout(rerollTarget, L.rerollDelay(CONFIG));
   }
 
-  setTimeout(tick, rand(1500, 4000));
-  setTimeout(rerollTarget, L.rerollDelay(CONFIG));
+  // ループ開始（多重起動しないようガード）。
+  let started = false;
+  function start() {
+    if (started) return;
+    started = true;
+    setTimeout(tick, rand(1500, 4000));
+    setTimeout(rerollTarget, L.rerollDelay(CONFIG));
+  }
+
+  // --- 設定の読み込みと監視 ---
+  // chrome.storage.sync から読み、onChanged でリアルタイム反映する。
+  // storage が無い環境（単体実行など）はデフォルトで動かす。
+  if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.sync) {
+    chrome.storage.sync.get(DEFAULTS, (loaded) => {
+      applySettings(loaded);
+      start(); // 設定確定後にループ開始
+    });
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== "sync") return;
+      // 変更分だけでなく全体を読み直して一貫した状態を作る。
+      chrome.storage.sync.get(DEFAULTS, applySettings);
+    });
+  } else {
+    applySettings(DEFAULTS);
+    start();
+  }
 })();
