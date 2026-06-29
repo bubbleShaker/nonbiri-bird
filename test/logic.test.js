@@ -94,6 +94,55 @@ test("nextTickDelay: 飛べる時は短い間隔、飛べない時は 8000ms 固
   assert.equal(L.nextTickDelay(false, constRng(0.9)), 8000); // rng に依らず固定
 });
 
+test("nextTickDelay: scale で間隔が伸縮する（飛べない時は scale 無視）", () => {
+  assert.equal(L.nextTickDelay(true, constRng(0), 2), 1600); // 低頻度=長間隔
+  assert.equal(L.nextTickDelay(true, constRng(0), 0.5), 400); // 高頻度=短間隔
+  assert.equal(L.nextTickDelay(false, constRng(0), 2), 8000); // 非アクティブは固定
+});
+
+test("clampMaxBirds: 1〜MAX_BIRDS に丸め、NaN/範囲外は安全側へ", () => {
+  assert.equal(L.clampMaxBirds(3), 3);
+  assert.equal(L.clampMaxBirds(0), 1); // 下限クランプ
+  assert.equal(L.clampMaxBirds(99), L.MAX_BIRDS); // 上限クランプ
+  assert.equal(L.clampMaxBirds("4"), 4); // 文字列も数値化
+  assert.equal(L.clampMaxBirds(2.6), 3); // 四捨五入
+  assert.equal(L.clampMaxBirds(NaN), 1); // NaN フォールバック
+  assert.equal(L.clampMaxBirds(undefined), 1);
+});
+
+test("DEFAULTS/MAX_BIRDS: スキーマの単一情報源が公開されている", () => {
+  assert.equal(L.MAX_BIRDS, 5);
+  assert.deepEqual(L.DEFAULTS, {
+    enabled: true,
+    maxBirds: 3,
+    frequency: "mid",
+    excludedSites: [],
+  });
+});
+
+test("freqScale: low>mid>high の倍率、未知値は等倍", () => {
+  assert.equal(L.freqScale("low"), 2);
+  assert.equal(L.freqScale("mid"), 1);
+  assert.equal(L.freqScale("high"), 0.5);
+  assert.equal(L.freqScale("unknown"), 1);
+  assert.equal(L.freqScale(undefined), 1);
+});
+
+test("isHostExcluded: 完全一致とサブドメイン一致を除外、無関係は許可", () => {
+  const list = ["example.com", "blocked.test"];
+  assert.equal(L.isHostExcluded("example.com", list), true); // 完全一致
+  assert.equal(L.isHostExcluded("foo.example.com", list), true); // サブドメイン
+  assert.equal(L.isHostExcluded("notexample.com", list), false); // 前方部分一致は除外しない
+  assert.equal(L.isHostExcluded("other.org", list), false);
+  assert.equal(L.isHostExcluded("EXAMPLE.COM", list), true); // 大文字小文字無視
+});
+
+test("isHostExcluded: 空行・空白・非配列を安全に無視", () => {
+  assert.equal(L.isHostExcluded("example.com", ["", "  "]), false);
+  assert.equal(L.isHostExcluded("example.com", null), false);
+  assert.equal(L.isHostExcluded("example.com", [" example.com "]), true); // 前後空白は trim
+});
+
 test("rerollDelay: 設定の範囲から引く", () => {
   const cfg = { rerollMinMs: 25000, rerollMaxMs: 60000 };
   assert.equal(L.rerollDelay(cfg, constRng(0)), 25000);
