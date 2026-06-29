@@ -46,4 +46,17 @@ python icons/generate_icons.py          # icons/iconNN.png を再出力
 - ドット絵スプライトによる鳥の種類追加
 - Chrome Web Store / Edge Add-ons への配布
 
+## ストアへの配布
+
+Chrome Web Store / Edge Add-ons への申請手順・version 運用・配布 zip の作り方は
+[`summary/02-store-release.md`](summary/02-store-release.md) にまとめている。
+プライバシー方針は [`PRIVACY.md`](PRIVACY.md)。
+
+配布用 zip は以下で作成する（必要ファイルだけをホワイトリストで同梱する）。
+
+```powershell
+pwsh ./scripts/build-zip.ps1   # => dist/nonbiri-bird-<version>.zip
+# PowerShell 7 が無ければ powershell ./scripts/build-zip.ps1 でも可
+```
+
 技術調査の詳細は [`research/01-survey.md`](research/01-survey.md) を参照。
