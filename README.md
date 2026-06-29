@@ -28,6 +28,16 @@
 |---|---|
 | `manifest.json` | MV3 マニフェスト（content script を全ページに注入） |
 | `src/content.js` | Shadow DOM オーバーレイ生成・鳥の飛行ロジック |
+| `icons/` | 拡張アイコン（16/32/48/128px）と生成スクリプト |
+
+### アイコンの再生成
+
+アイコンはクリーム背景の白い鳥のドット絵で、`icons/generate_icons.py`（Python + Pillow）でコード生成している。差し替えたい時は以下で再生成する。
+
+```
+pip install -r icons/requirements.txt   # Pillow==12.2.0
+python icons/generate_icons.py          # icons/iconNN.png を再出力
+```
 
 ## ロードマップ
 
