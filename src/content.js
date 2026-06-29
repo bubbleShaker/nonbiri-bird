@@ -92,6 +92,14 @@
   shadow.appendChild(style);
   document.documentElement.appendChild(host);
 
+  // 鳥の雛形を 1 回だけ組み、spawn 時は cloneNode で複製する
+  // （毎回 innerHTML を再パースする無駄を避けて軽量化する）。
+  const birdTemplate = document.createElement("div");
+  birdTemplate.className = "bird";
+  birdTemplate.innerHTML = FRAME_SVGS.map(
+    (svg, i) => `<div class="frame${i === 0 ? " on" : ""}">${svg}</div>`
+  ).join("");
+
   // 速度の緩急用の easing 候補（滑空・加速・減速など）
   const EASINGS = [
     "linear",
@@ -105,7 +113,9 @@
   let activeCount = 0; // 現在飛んでいる鳥の数
   let target = 1; // 空にいてほしい目標数（設定読み込み時に決め直す）
   let targetInitialized = false; // 初回 applySettings で必ず一度振る
-  const activeBirds = new Set(); // 各鳥の cleanup 関数（OFF/除外時に一括撤去するため）
+  // 各鳥のコントローラ {cleanup, pause, resume}。OFF/除外時の一括撤去や
+  // 背景タブでの一括 pause/resume に使う。
+  const activeBirds = new Set();
 
   // --- 設定（popup から chrome.storage.sync 経由で反映される）---
   // スキーマの単一情報源は logic.js（DEFAULTS / clampMaxBirds）。popup と揃える。
@@ -114,8 +124,16 @@
   let siteEnabled = true; // このサイトで飛ばしてよいか（enabled かつ 非除外）
 
   // 飛行中の鳥を全部片付ける（OFF/除外に切り替わった時）。
+  // スナップショットを取って反復するので、cleanup 中の Set 削除と衝突しない。
   function removeAllBirds() {
-    for (const cleanup of [...activeBirds]) cleanup();
+    for (const b of [...activeBirds]) b.cleanup();
+  }
+  // 背景タブで全鳥を一時停止／復帰（省電力。アニメと羽ばたきを止める）。
+  function pauseAllBirds() {
+    for (const b of [...activeBirds]) b.pause();
+  }
+  function resumeAllBirds() {
+    for (const b of [...activeBirds]) b.resume();
   }
 
   // storage の値を内部パラメータへ反映する。
@@ -146,27 +164,33 @@
     const w = size;
     const h = size * (GRID_H / GRID_W);
 
-    const bird = document.createElement("div");
-    bird.className = "bird";
+    // 雛形を複製（innerHTML 再パースを避ける）。個別の見た目だけ設定する。
+    const bird = birdTemplate.cloneNode(true);
     bird.style.width = w + "px";
     bird.style.height = h + "px";
     bird.style.opacity = opacity.toFixed(2);
-    // 3フレームを重ねて置き、表示を切り替えて羽ばたかせる。
-    bird.innerHTML = FRAME_SVGS.map(
-      (svg, i) => `<div class="frame${i === 0 ? " on" : ""}">${svg}</div>`
-    ).join("");
     const frameEls = bird.querySelectorAll(".frame");
     shadow.appendChild(bird);
     activeCount++;
 
     // 羽ばたき: 一定間隔でフレームを切り替える（鳥ごとに周期をずらして自然に）。
+    // 背景タブで止められるよう start/stop を関数化する。
     let fi = 0;
     const flapMs = rand(110, 190);
-    const flapTimer = setInterval(() => {
-      frameEls.forEach((el) => el.classList.remove("on"));
-      frameEls[FLAP_CYCLE[fi % FLAP_CYCLE.length]].classList.add("on");
-      fi++;
-    }, flapMs);
+    let flapTimer = null;
+    const startFlap = () => {
+      if (flapTimer) return;
+      flapTimer = setInterval(() => {
+        frameEls.forEach((el) => el.classList.remove("on"));
+        frameEls[FLAP_CYCLE[fi % FLAP_CYCLE.length]].classList.add("on");
+        fi++;
+      }, flapMs);
+    };
+    const stopFlap = () => {
+      clearInterval(flapTimer);
+      flapTimer = null;
+    };
+    startFlap();
 
     // 左右どちらから入るか・基準Y・ゆらぎ幅を計算（画面外→画面外。上空のみ）。
     const { startX, endX, dir, baseY, wander } = L.entryGeometry({
@@ -195,13 +219,49 @@
     const cleanup = () => {
       if (cleaned) return; // 冪等化: 二重発火で activeCount を二重に減らさない
       cleaned = true;
-      clearInterval(flapTimer);
+      clearTimeout(safety);
+      stopFlap();
       anim.cancel(); // 強制撤去時にアニメを止める（自然完了時は二重でも無害）
       bird.remove();
       activeCount--;
-      activeBirds.delete(cleanup);
+      activeBirds.delete(controller);
     };
-    activeBirds.add(cleanup); // OFF/除外時に removeAllBirds から呼べるよう登録
+    // 保険: anim.finished が（ブラウザ差/不発で）来なくても必ず撤去する。
+    // 余裕を持って残りアニメ時間の少し後に発火。cleanup は冪等なので二重でも安全。
+    const SAFETY_MARGIN = 2000;
+    let safety = setTimeout(cleanup, duration + SAFETY_MARGIN);
+    // pause 中は実時間が進んでも撤去しないよう、残り時間ベースで貼り直す。
+    const armSafety = () => {
+      const played = typeof anim.currentTime === "number" ? anim.currentTime : 0;
+      const remaining = Math.max(0, duration - played);
+      safety = setTimeout(cleanup, remaining + SAFETY_MARGIN);
+    };
+
+    const controller = {
+      cleanup,
+      // 背景タブ: アニメ・羽ばたき・保険タイマーを止める（撤去済みなら何もしない）。
+      pause: () => {
+        if (cleaned) return;
+        stopFlap();
+        clearTimeout(safety); // pause 中の実時間経過で撤去されないよう止める
+        try {
+          anim.pause();
+        } catch (_e) {
+          /* 完了済み等で pause 不可なら無視 */
+        }
+      },
+      resume: () => {
+        if (cleaned) return;
+        startFlap();
+        try {
+          anim.play();
+        } catch (_e) {
+          /* 同上 */
+        }
+        armSafety(); // 残りアニメ時間ぶんで保険を貼り直す
+      },
+    };
+    activeBirds.add(controller); // OFF/除外/可視性変化から呼べるよう登録
     // finished は「完了で resolve / cancel で reject」。両方を拾って必ず後始末する。
     anim.finished.then(cleanup, cleanup);
   }
@@ -215,7 +275,8 @@
     }
     // 飛ばせない状況（無効/動き抑制/非表示タブ）は間隔を広げて wakeup を減らす。
     // 飛べる時は頻度設定 freqScale を掛ける（高=短間隔/低=長間隔）。
-    setTimeout(tick, L.nextTickDelay(canFly, Math.random, freqScale));
+    // ハンドルを保持し、可視化時に取り消して即再開できるようにする（多重ループ防止）。
+    tickTimer = setTimeout(tick, L.nextTickDelay(canFly, Math.random, freqScale));
   }
 
   // 空模様を時々変える: 目標数を振り直す。
@@ -224,12 +285,26 @@
     setTimeout(rerollTarget, L.rerollDelay(CONFIG));
   }
 
+  // 背景タブ抑制: hidden で全鳥を停止、visible で復帰＋すぐ tick を再開する。
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      pauseAllBirds();
+    } else {
+      resumeAllBirds();
+      if (started) {
+        clearTimeout(tickTimer); // 8000ms 待ちを取り消して即再開（多重ループは防ぐ）
+        tickTimer = setTimeout(tick, rand(300, 900));
+      }
+    }
+  });
+
   // ループ開始（多重起動しないようガード）。
   let started = false;
+  let tickTimer = null;
   function start() {
     if (started) return;
     started = true;
-    setTimeout(tick, rand(1500, 4000));
+    tickTimer = setTimeout(tick, rand(1500, 4000));
     setTimeout(rerollTarget, L.rerollDelay(CONFIG));
   }
 
